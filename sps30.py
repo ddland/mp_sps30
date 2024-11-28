@@ -27,6 +27,7 @@ class SPS30:
         self.i2c = i2c
         self.output = print_output
         self.found = self.__findi2c()
+        self.starttime = time.time()
     
     def write_read(self, cmd, nbytes=60):
         if len(cmd) == 2:
@@ -36,9 +37,28 @@ class SPS30:
     
     def start_measurement(self):
         cmd = bytearray([0x00, 0x10, 0x03, 0x00, self.calc_crc8([0x03, 0x00])])
-        self.i2c.writeto(self.address, cmd) # measurement mode
+        max_tries = 0
+        while max_tries < 10:
+            try:
+                self.i2c.writeto(self.address, cmd) # measurement mode
+                time.sleep(0.5) # wait till everthing is ready
+                self.cleanup(dt=10)
+                max_tries = 11
+            except OSError as e:
+                max_tries += 1
+                print('trying to configure %d/10' %(max_tries))
+                print(e)
+                time.sleep(0.5)
+        if max_tries == 10:
+            raise OSError("Not possible to configure sensor. Something is wrong...")
+
+        self.read_data() # first measurement usualy doesn't look goodself.i2c.writeto(self.address, cmd) # measurement mode
+    
+    def cleanup(self, dt=10):
+        self.starttime = time.time()
         self.i2c.writeto(self.address, bytearray([0x56, 0x07])) #cleanup
-        time.sleep(10)
+        time.sleep(dt)
+        self.read_data()
         
     def gen_array(self, command):
         command.append(self.calc_crc8(command))
@@ -56,15 +76,19 @@ class SPS30:
         self.last_measurement = []
         for ii in range(len(cleandata)//2):
             self.last_measurement.append(self.calcFloat(cleandata[2*ii] + cleandata[2*ii+1]))
+        if (time.time() - self.starttime) % (259200) == 0: # cleanup every 3 days
+            self.cleanup()
         
         
     def __findi2c(self):
-        if self.address in self.i2c.scan():
+        i2cbus = self.i2c.scan()
+        if (self.address in i2cbus) and (len(i2cbus) < 10):
             if self.output:
                 print('device found')
             return True
         else:
-            return False
+            print("I2Cbus devices: ", i2cbus)
+            raise OSError("SPS30 not found on I2C bus!")
         
     def calc_crc8(self, byte_array):
         """
